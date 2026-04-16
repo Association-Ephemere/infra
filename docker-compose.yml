@@ -1,0 +1,193 @@
+services:
+
+  postgres:
+    profiles: [primary]
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_DB: photostand
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+    volumes:
+      - ./volumes/db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d photostand"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  rabbitmq:
+    profiles: [primary]
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    profiles: [primary]
+    image: minio/minio
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_SERVER_URL: "http://${PRIMARY_IP:-127.0.0.1}:9000"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio-init:
+    profiles: [primary]
+    image: minio/mc
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/photostand &&
+      echo 'Bucket photostand ready'
+      "
+    restart: "no"
+
+  rabbitmq-init:
+    profiles: [primary]
+    image: curlimages/curl:latest
+    container_name: rabbitmq-init
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "B=http://guest:guest@rabbitmq:15672/api && curl -sf -X PUT $$B/exchanges/%2F/photostand -H 'Content-Type: application/json' -d '{\"type\":\"direct\",\"durable\":true}' && curl -sf -X PUT $$B/queues/%2F/print.jobs -H 'Content-Type: application/json' -d '{\"durable\":true}' && curl -sf -X PUT $$B/queues/%2F/print.status -H 'Content-Type: application/json' -d '{\"durable\":true}' && curl -sf -X POST $$B/bindings/%2F/e/photostand/q/print.jobs -H 'Content-Type: application/json' -d '{\"routing_key\":\"print.jobs\"}' && curl -sf -X POST $$B/bindings/%2F/e/photostand/q/print.status -H 'Content-Type: application/json' -d '{\"routing_key\":\"print.status\"}' && echo 'RabbitMQ topology ready'"
+    restart: "no"
+
+  pgadmin:
+    profiles: [primary]
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5050:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/misc/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  job-svc:
+    profiles: [primary]
+    build: ../job-svc
+    container_name: job-svc
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=photostand;Username=root;Password=root"
+      RabbitMq__Uri: "amqp://guest:guest@rabbitmq:5672"
+      MinIO__Endpoint: "${PRIMARY_IP:-127.0.0.1}:9000"
+      MinIO__AccessKey: minioadmin
+      MinIO__SecretKey: minioadmin
+      MinIO__UseSSL: "false"
+      MinIO__Bucket: photostand
+      Cors__AllowedOrigins: "*"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8080' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ingest-svc:
+    profiles: [primary, secondary]
+    build: ../ingest-svc
+    container_name: ingest-svc
+    user: "0"
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Watcher__Path: /data/input
+      Watcher__StandId: ${STAND_ID:-stand-a}
+      Watcher__ProcessedPath: /data/processed
+      Watcher__FailedPath: /data/failed
+      Storage__Endpoint: "${STORAGE_ENDPOINT:-minio:9000}"
+      Storage__AccessKey: minioadmin
+      Storage__SecretKey: minioadmin
+      Storage__UseSSL: "false"
+      Storage__Bucket: photostand
+      Storage__FullPrefix: full
+      Storage__LowPrefix: low
+      Watermark__BottomLeftPath: /watermarks/IONIS.png
+      Watermark__BottomRightPath: /watermarks/Ephemere_Logo_Blanc.png
+      Watermark__PaddingPixels: 32
+      Watermark__HeightPx: 125
+    volumes:
+      - ./volumes/capture/${STAND_ID:-stand-a}/watch:/data/input
+      - ./volumes/capture/${STAND_ID:-stand-a}/processed:/data/processed
+      - ./volumes/capture/${STAND_ID:-stand-a}/failed:/data/failed
+      - ./watermark:/watermarks:ro
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    profiles: [primary]
+    build: ../frontend
+    container_name: frontend
+    environment:
+      VITE_JOB_SERVICE_URL: "http://${PRIMARY_IP:-127.0.0.1}:8080"
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+  minio_data:
+  pgadmin_data:

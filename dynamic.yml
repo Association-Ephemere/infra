@@ -1,0 +1,7 @@
+http:
+  routers:
+    dashboard:
+      rule: "Host(`traefik.photostand.local`)"
+      service: api@internal
+      entrypoints:
+        - web

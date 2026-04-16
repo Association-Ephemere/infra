@@ -1,0 +1,47 @@
+{
+  "vhosts": [{ "name": "/" }],
+  "exchanges": [
+    {
+      "name": "photostand",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "print.jobs",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": { "x-queue-type": "quorum" }
+    },
+    {
+      "name": "print.status",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": { "x-queue-type": "quorum" }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "photostand",
+      "vhost": "/",
+      "destination": "print.jobs",
+      "destination_type": "queue",
+      "routing_key": "print.jobs",
+      "arguments": {}
+    },
+    {
+      "source": "photostand",
+      "vhost": "/",
+      "destination": "print.status",
+      "destination_type": "queue",
+      "routing_key": "print.status",
+      "arguments": {}
+    }
+  ]
+}

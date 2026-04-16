@@ -1,0 +1,7 @@
+# Ignore volume data, keep directory structure
+*
+!.gitignore
+!capture/
+!capture/.gitkeep
+!db/
+!db/.gitkeep
