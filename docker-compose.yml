@@ -158,8 +158,9 @@ services:
       Storage__LowPrefix: low
       Watermark__BottomLeftPath: /watermarks/IONIS.png
       Watermark__BottomRightPath: /watermarks/Ephemere_Logo_Blanc.png
-      Watermark__PaddingPixels: 32
-      Watermark__HeightPx: 125
+      Watermark__PaddingX: 300
+      Watermark__PaddingY: 100
+      Watermark__HeightPx: 300
     volumes:
       - ./volumes/capture/${STAND_ID:-stand-a}/watch:/data/input
       - ./volumes/capture/${STAND_ID:-stand-a}/processed:/data/processed
